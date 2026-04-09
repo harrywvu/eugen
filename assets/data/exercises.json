@@ -1,0 +1,32 @@
+[
+  {
+    "id": "incline_bench_press",
+    "name": "Incline Bench Press",
+    "muscle": "Chest",
+    "equipmentOptions": ["Dumbbells", "Barbell", "Machine"]
+  },
+  {
+    "id": "squat",
+    "name": "Squat",
+    "muscle": "Legs",
+    "equipmentOptions": ["Barbell", "Dumbbells", "Smith Machine"]
+  },
+  {
+    "id": "lat_pulldown",
+    "name": "Lat Pulldown",
+    "muscle": "Back",
+    "equipmentOptions": ["Cable", "Machine", "Band"]
+  },
+  {
+    "id": "shoulder_press",
+    "name": "Shoulder Press",
+    "muscle": "Shoulders",
+    "equipmentOptions": ["Dumbbells", "Barbell", "Machine"]
+  },
+  {
+    "id": "romanian_deadlift",
+    "name": "Romanian Deadlift",
+    "muscle": "Hamstrings",
+    "equipmentOptions": ["Barbell", "Dumbbells", "Kettlebell"]
+  }
+]
