@@ -5,7 +5,31 @@ import 'package:flutter/foundation.dart';
 import '../data/exercise_seed_loader.dart';
 import '../data/local_storage_service.dart';
 import '../models/exercise.dart';
-import '../models/workout_entry.dart';
+import '../models/workout_session.dart';
+
+class ActiveWorkoutSession {
+  const ActiveWorkoutSession({
+    required this.id,
+    required this.startedAt,
+    required this.exercises,
+  });
+
+  final String id;
+  final DateTime startedAt;
+  final List<WorkoutSessionExercise> exercises;
+
+  ActiveWorkoutSession copyWith({
+    String? id,
+    DateTime? startedAt,
+    List<WorkoutSessionExercise>? exercises,
+  }) {
+    return ActiveWorkoutSession(
+      id: id ?? this.id,
+      startedAt: startedAt ?? this.startedAt,
+      exercises: exercises ?? this.exercises,
+    );
+  }
+}
 
 class WorkoutProvider extends ChangeNotifier {
   WorkoutProvider(this._storageService);
@@ -13,113 +37,253 @@ class WorkoutProvider extends ChangeNotifier {
   final LocalStorageService _storageService;
   final ExerciseSeedLoader _seedLoader = ExerciseSeedLoader();
 
-  final List<Exercise> _coreExercises = [];
-  final List<Exercise> _customExercises = [];
-  final List<WorkoutEntry> _workouts = [];
+  final List<Exercise> _exercises = [];
+  final List<WorkoutSession> _sessions = [];
 
+  ActiveWorkoutSession? _activeWorkout;
   bool _isLoading = false;
-  String _searchQuery = '';
-  String _equipmentFilter = 'All';
+  bool _hasLoaded = false;
+  String? _loadError;
 
   bool get isLoading => _isLoading;
-  String get searchQuery => _searchQuery;
-  String get equipmentFilter => _equipmentFilter;
+  String? get loadError => _loadError;
+  ActiveWorkoutSession? get activeWorkout => _activeWorkout;
 
-  List<WorkoutEntry> get recentWorkouts {
-    final sorted = [..._workouts];
-    sorted.sort((a, b) => b.performedAt.compareTo(a.performedAt));
-    return sorted;
-  }
+  List<Exercise> get allExercises =>
+      [..._exercises]..sort((a, b) => a.name.compareTo(b.name));
 
-  List<Exercise> get allExercises => [..._coreExercises, ..._customExercises];
-
-  List<String> get allEquipmentFilters {
-    final values = <String>{'All'};
-    for (final exercise in allExercises) {
-      values.addAll(exercise.equipmentOptions);
-    }
-    final sorted = values.toList()..sort();
-    if (sorted.remove('All')) {
-      sorted.insert(0, 'All');
-    }
-    return sorted;
-  }
+  List<WorkoutSession> get recentSessions =>
+      [..._sessions]..sort((a, b) => b.date.compareTo(a.date));
 
   Future<void> load() async {
+    if (_isLoading || _hasLoaded) {
+      return;
+    }
+
     _isLoading = true;
+    _loadError = null;
     notifyListeners();
 
-    _coreExercises
-      ..clear()
-      ..addAll(await _seedLoader.loadCoreExercises());
-    _customExercises
-      ..clear()
-      ..addAll(_storageService.loadCustomExercises());
-    _workouts
-      ..clear()
-      ..addAll(_storageService.loadWorkouts());
+    try {
+      final exercises = await _seedLoader.loadCoreExercises();
+      final sessions = _storageService.loadWorkouts();
 
-    _isLoading = false;
-    notifyListeners();
+      _exercises
+        ..clear()
+        ..addAll(exercises);
+      _sessions
+        ..clear()
+        ..addAll(sessions);
+      _hasLoaded = true;
+    } catch (_) {
+      _loadError = 'Failed to load local workout data.';
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
   }
 
-  List<Exercise> filteredExercises() {
-    return allExercises.where((exercise) {
-      final matchesText = _searchQuery.isEmpty ||
-          exercise.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          exercise.muscle.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          exercise.equipmentOptions.any(
-            (equipment) => equipment.toLowerCase().contains(_searchQuery.toLowerCase()),
-          );
-
-      final matchesEquipment = _equipmentFilter == 'All' ||
-          exercise.equipmentOptions.contains(_equipmentFilter);
-
-      return matchesText && matchesEquipment;
-    }).toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+  List<Exercise> filterExercises(String query) {
+    final q = query.trim().toLowerCase();
+    final filtered = allExercises.where((exercise) {
+      if (q.isEmpty) {
+        return true;
+      }
+      return exercise.name.toLowerCase().contains(q) ||
+          exercise.muscle.toLowerCase().contains(q) ||
+          exercise.equipmentOptions
+              .any((option) => option.toLowerCase().contains(q));
+    }).toList();
+    filtered.sort((a, b) => a.name.compareTo(b.name));
+    return filtered;
   }
 
-  void setSearchQuery(String value) {
-    _searchQuery = value;
-    notifyListeners();
-  }
+  void startWorkout() {
+    if (_activeWorkout != null) {
+      return;
+    }
 
-  void setEquipmentFilter(String value) {
-    _equipmentFilter = value;
-    notifyListeners();
-  }
-
-  List<WorkoutEntry> historyForExercise(String exerciseId) {
-    final history = _workouts.where((workout) => workout.exerciseId == exerciseId).toList();
-    history.sort((a, b) => b.performedAt.compareTo(a.performedAt));
-    return history;
-  }
-
-  Future<void> addOrUpdateWorkout(WorkoutEntry workout) async {
-    _workouts.removeWhere((entry) => entry.id == workout.id);
-    _workouts.add(workout);
-    await _storageService.saveWorkout(workout);
+    _activeWorkout = ActiveWorkoutSession(
+      id: generateId('active_workout'),
+      startedAt: DateTime.now(),
+      exercises: const [],
+    );
     notifyListeners();
   }
 
-  Future<void> deleteWorkout(String workoutId) async {
-    _workouts.removeWhere((entry) => entry.id == workoutId);
-    await _storageService.deleteWorkout(workoutId);
+  void discardWorkout() {
+    if (_activeWorkout == null) {
+      return;
+    }
+    _activeWorkout = null;
     notifyListeners();
   }
 
-  Future<void> addOrUpdateCustomExercise(Exercise exercise) async {
-    final stored = exercise.copyWith(isCustom: true);
-    _customExercises.removeWhere((entry) => entry.id == stored.id);
-    _customExercises.add(stored);
-    await _storageService.saveCustomExercise(stored);
+  void addExerciseToActiveWorkout({
+    required Exercise exercise,
+    required String equipmentVariation,
+  }) {
+    final current = _activeWorkout;
+    if (current == null) {
+      return;
+    }
+
+    final updatedExercises = [
+      ...current.exercises,
+      WorkoutSessionExercise(
+        id: generateId('session_exercise'),
+        exerciseId: exercise.id,
+        name: exercise.name,
+        muscle: exercise.muscle,
+        equipmentVariation: equipmentVariation,
+        sets: [
+          WorkoutSet(
+            id: generateId('set'),
+            reps: 0,
+            weight: 0,
+          ),
+        ],
+      ),
+    ];
+
+    _activeWorkout = current.copyWith(exercises: updatedExercises);
     notifyListeners();
   }
 
-  Future<void> deleteCustomExercise(String exerciseId) async {
-    _customExercises.removeWhere((entry) => entry.id == exerciseId);
-    await _storageService.deleteCustomExercise(exerciseId);
+  void removeExerciseFromActiveWorkout(String sessionExerciseId) {
+    final current = _activeWorkout;
+    if (current == null) {
+      return;
+    }
+
+    _activeWorkout = current.copyWith(
+      exercises: current.exercises
+          .where((exercise) => exercise.id != sessionExerciseId)
+          .toList(),
+    );
+    notifyListeners();
+  }
+
+  void addSetToExercise(String sessionExerciseId) {
+    final current = _activeWorkout;
+    if (current == null) {
+      return;
+    }
+
+    _activeWorkout = current.copyWith(
+      exercises: current.exercises.map((exercise) {
+        if (exercise.id != sessionExerciseId) {
+          return exercise;
+        }
+        return exercise.copyWith(
+          sets: [
+            ...exercise.sets,
+            WorkoutSet(
+              id: generateId('set'),
+              reps: 0,
+              weight: 0,
+            ),
+          ],
+        );
+      }).toList(),
+    );
+    notifyListeners();
+  }
+
+  void removeSetFromExercise({
+    required String sessionExerciseId,
+    required String setId,
+  }) {
+    final current = _activeWorkout;
+    if (current == null) {
+      return;
+    }
+
+    _activeWorkout = current.copyWith(
+      exercises: current.exercises.map((exercise) {
+        if (exercise.id != sessionExerciseId || exercise.sets.length <= 1) {
+          return exercise;
+        }
+        return exercise.copyWith(
+          sets: exercise.sets.where((set) => set.id != setId).toList(),
+        );
+      }).toList(),
+    );
+    notifyListeners();
+  }
+
+  void updateSetFields({
+    required String sessionExerciseId,
+    required String setId,
+    int? reps,
+    double? weight,
+    double? rpe,
+    bool clearRpe = false,
+    String? notes,
+    WorkoutSetMetadata? metadata,
+  }) {
+    final current = _activeWorkout;
+    if (current == null) {
+      return;
+    }
+
+    _activeWorkout = current.copyWith(
+      exercises: current.exercises.map((exercise) {
+        if (exercise.id != sessionExerciseId) {
+          return exercise;
+        }
+        return exercise.copyWith(
+          sets: exercise.sets.map((set) {
+            if (set.id != setId) {
+              return set;
+            }
+            return set.copyWith(
+              reps: reps,
+              weight: weight,
+              rpe: rpe,
+              clearRpe: clearRpe,
+              notes: notes,
+              metadata: metadata,
+            );
+          }).toList(),
+        );
+      }).toList(),
+    );
+    notifyListeners();
+  }
+
+  Future<WorkoutSession?> finishWorkout() async {
+    final current = _activeWorkout;
+    if (current == null || current.exercises.isEmpty) {
+      return null;
+    }
+
+    final session = WorkoutSession(
+      id: generateId('workout_session'),
+      date: DateTime.now(),
+      exercises: current.exercises.map((exercise) {
+        return exercise.copyWith(
+          sets: exercise.sets.map((set) {
+            return set.copyWith(
+              reps: max(0, set.reps),
+              weight: max(0, set.weight),
+              notes: set.notes.trim(),
+            );
+          }).toList(),
+        );
+      }).toList(),
+    );
+
+    _sessions.add(session);
+    await _storageService.saveWorkout(session);
+    _activeWorkout = null;
+    notifyListeners();
+    return session;
+  }
+
+  Future<void> deleteSession(String sessionId) async {
+    _sessions.removeWhere((session) => session.id == sessionId);
+    await _storageService.deleteWorkout(sessionId);
     notifyListeners();
   }
 
